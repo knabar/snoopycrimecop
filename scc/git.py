@@ -218,6 +218,12 @@ def get_token_or_user(local=False):
     return token
 
 
+def add_token_to_url(url, token, local=False):
+    if token is True:
+        token = get_token(local)
+    return 'https://scc:%s@%s' % (token, url.split('//')[1]) if token else url
+
+
 def get_github(login_or_token=None, password=None, **kwargs):
     """
     Create a GitHub instance. Can be constructed using an OAuth2 token,
@@ -1513,10 +1519,11 @@ class GitRepository(object):
                 self.call("git", "reset", "--hard", "%s" % premerge_sha)
 
     def merge(self, comment=False, commit_id="merge",
-              set_commit_status=False):
+              set_commit_status=False, force_url_token=None):
         """Merge candidate pull requests and pull requests."""
         self.dbg("## Unique users: %s", self.unique_logins())
-        for key, url in list(self.get_merge_remotes().items()):
+        for key, url in list(self.get_merge_remotes(
+                force_url_token=force_url_token).items()):
             self.call("git", "remote", "add", key, url)
             self.fetch(key)
 
@@ -1763,7 +1770,8 @@ class GitRepository(object):
 
     def rmerge(self, filters, info=False, comment=False, commit_id="merge",
                top_message=None, update_gitmodules=False,
-               set_commit_status=False, allow_empty=True, is_submodule=False):
+               set_commit_status=False, allow_empty=True, is_submodule=False,
+               force_url_token=None):
         """Recursively merge PRs for each submodule."""
 
         if self.repository_config is not None and \
@@ -1795,7 +1803,8 @@ class GitRepository(object):
                 merge_msg += '\n'
 
             merge_msg += self.merge(comment, commit_id=commit_id,
-                                    set_commit_status=set_commit_status)
+                                    set_commit_status=set_commit_status,
+                                    force_url_token=force_url_token)
             postsha1 = self.get_current_sha1()
             updated = (presha1 != postsha1)
 
@@ -1958,7 +1967,7 @@ class GitRepository(object):
                 unique_logins.append(v)
         return unique_logins
 
-    def get_merge_remotes(self):
+    def get_merge_remotes(self, force_url_token=None):
         """Return remotes associated to unique login."""
         remotes = {}
         for user, repo in self.unique_logins():
@@ -1967,7 +1976,10 @@ class GitRepository(object):
                 continue
             key = "merge_%s" % user
             if repo.private:
-                url = repo.ssh_url
+                if not force_url_token:
+                    url = repo.ssh_url
+                else:
+                    url = add_token_to_url(repo.git_url, force_url_token)
             else:
                 url = repo.git_url
             remotes[key] = url
@@ -3203,6 +3215,10 @@ class Merge(FilteredPullRequestsCommand):
             '--set-commit-status', action='store_true',
             help='Set success/failure status on latest commits in all PRs '
             'in the merge.')
+        self.parser.add_argument(
+            '--force-git-urls', action='store_true',
+            help='Use GIT style URLs for remote repositories even when they '
+            'are private.')
         self.add_new_commit_args()
 
     def get_action(self):
@@ -3240,12 +3256,15 @@ class Merge(FilteredPullRequestsCommand):
         if args.check_commit_status:
             commit_args.append("-S%s" % args.check_commit_status)
 
+        token = args.token or True
+
         updated, merge_msg = main_repo.rmerge(
             self.filters, args.info,
             args.comment, commit_id=" ".join(commit_args),
             top_message=args.message,
             update_gitmodules=args.update_gitmodules,
-            set_commit_status=args.set_commit_status)
+            set_commit_status=args.set_commit_status,
+            force_url_token=token if args.force_git_urls else None)
 
         for line in merge_msg.split("\n"):
             self.log.info(line)
