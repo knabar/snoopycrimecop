@@ -1306,7 +1306,8 @@ class GitRepository(object):
 
     def has_local_changes(self):
         """Check for local changes in the Git repository"""
-        out = self.communicate("git", "status", "--porcelain").strip()
+        out = self.communicate(
+            "git", "status", "--porcelain", "--untracked-files=no").strip()
         if out:
             self.dbg("%s has local changes", self)
             return True
